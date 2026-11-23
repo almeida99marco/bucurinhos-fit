@@ -38,7 +38,8 @@ supabase/
 2. Em **GitHub → Connect**, deixe o Lovable criar o repositório.
 3. Clone esse repositório, copie todo o conteúdo desta pasta por cima e faça `git push`. O Lovable sincroniza sozinho.
 4. Peça ao Lovable: *"Aplique as migrações em supabase/migrations e publique as edge functions ai-nutrition e ai-coach"*.
-5. IA — escolha o provedor pelos secrets do Supabase (Lovable Cloud → Secrets):
+5. IA — escolha o provedor pelos secrets do Supabase (Edge Functions → Secrets):
+   - **Google Gemini (grátis):** defina `GEMINI_API_KEY` (chave criada em aistudio.google.com). Tem prioridade sobre os demais.
    - **Claude (Anthropic):** defina `ANTHROPIC_API_KEY` (chave criada em console.anthropic.com). Opcional: `AI_MODEL` (padrão `claude-sonnet-5-5`).
    - **Sem configurar nada:** usa o `LOVABLE_API_KEY` do Lovable Cloud (AI Gateway, consome créditos do Lovable).
    - **Outro provedor compatível com OpenAI:** `AI_API_KEY`, `AI_API_URL` e `AI_MODEL`.

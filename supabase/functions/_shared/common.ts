@@ -44,14 +44,49 @@ export class HttpError extends Error {
 /**
  * Chamada ao provedor de IA. A chave fica somente nos secrets do Supabase.
  * Prioridade:
- *   1. ANTHROPIC_API_KEY  → Claude (API da Anthropic). Modelo: AI_MODEL ou "claude-sonnet-5-5".
- *   2. AI_API_KEY (+ AI_API_URL, AI_MODEL) → qualquer API compatível com o chat da OpenAI.
- *   3. LOVABLE_API_KEY → AI Gateway do Lovable Cloud (padrão quando nada mais é configurado).
+ *   1. GEMINI_API_KEY     → Google Gemini (plano gratuito do Google AI Studio). Modelo: AI_MODEL ou "gemini-flash-latest".
+ *   2. ANTHROPIC_API_KEY  → Claude (API da Anthropic, paga por uso). Modelo: AI_MODEL ou "claude-sonnet-5-5".
+ *   3. AI_API_KEY (+ AI_API_URL, AI_MODEL) → qualquer API compatível com o chat da OpenAI.
+ *   4. LOVABLE_API_KEY → AI Gateway do Lovable Cloud.
  */
+const clean = (v?: string) => v?.trim().replace(/^["']|["']$/g, "") || undefined;
+
+/** Chat compatível com OpenAI; tenta os modelos em ordem se um não existir para a chave. */
+async function openAICompat(url: string, key: string, models: string[], system: string, user: string): Promise<string> {
+  let last: Response | null = null;
+  for (const model of models) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        temperature: 0.4,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data?.choices?.[0]?.message?.content ?? "";
+    }
+    last = res;
+    if (res.status !== 404) break; // só troca de modelo quando ele não existe
+  }
+  await assertOk(last!);
+  return "";
+}
+
 export async function callAI(system: string, user: string): Promise<any> {
-  const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY")?.trim().replace(/^["']|["']$/g, "");
+  const geminiKey = clean(Deno.env.get("GEMINI_API_KEY"));
+  const anthropicKey = clean(Deno.env.get("ANTHROPIC_API_KEY"));
   let content = "";
-  if (anthropicKey) {
+  if (geminiKey) {
+    const models = [Deno.env.get("AI_MODEL"), "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest"].filter(Boolean) as string[];
+    content = await openAICompat("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiKey, models, system, user);
+  } else if (anthropicKey) {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": anthropicKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -67,33 +102,18 @@ export async function callAI(system: string, user: string): Promise<any> {
     const data = await res.json();
     content = (data?.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
   } else {
-    const lovableKey = Deno.env.get("LOVABLE_API_KEY");
-    const customKey = Deno.env.get("AI_API_KEY");
-    const key = customKey ?? lovableKey;
-    if (!key) throw new HttpError(500, "IA não configurada: defina ANTHROPIC_API_KEY, AI_API_KEY ou LOVABLE_API_KEY nos secrets do Supabase.");
+    const customKey = clean(Deno.env.get("AI_API_KEY"));
+    const key = customKey ?? clean(Deno.env.get("LOVABLE_API_KEY"));
+    if (!key) throw new HttpError(500, "IA não configurada: cadastre o secret GEMINI_API_KEY no Supabase.");
     const url = Deno.env.get("AI_API_URL") ?? (customKey ? "https://api.openai.com/v1/chat/completions" : "https://ai.gateway.lovable.dev/v1/chat/completions");
     const model = Deno.env.get("AI_MODEL") ?? (customKey ? "gpt-4o-mini" : "google/gemini-2.5-flash");
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        temperature: 0.4,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
-    });
-    await assertOk(res);
-    const data = await res.json();
-    content = data?.choices?.[0]?.message?.content ?? "";
+    content = await openAICompat(url, key, [model], system, user);
   }
   try {
-    const start = content.indexOf("{");
-    const end = content.lastIndexOf("}");
-    return JSON.parse(start >= 0 && end > start ? content.slice(start, end + 1) : content);
+    const cleaned = content.replace(/```(?:json)?/gi, "");
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    return JSON.parse(start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned);
   } catch {
     throw new HttpError(502, "A IA retornou uma resposta em formato inesperado. Tente novamente.");
   }
@@ -105,15 +125,17 @@ async function assertOk(res: Response) {
   let detail = "";
   try {
     const body = await res.json();
-    detail = String(body?.error?.message ?? body?.message ?? "").slice(0, 200);
+    const b = Array.isArray(body) ? body[0] : body;
+    detail = String(b?.error?.message ?? b?.message ?? "").slice(0, 200);
   } catch {
     /* sem corpo JSON */
   }
   console.error("AI error", res.status, detail);
-  if (res.status === 429) throw new HttpError(429, "Limite de uso da IA atingido. Tente novamente em instantes.");
+  if (res.status === 429) throw new HttpError(429, "Limite gratuito da IA atingido por agora. Tente de novo em alguns minutos (ou amanhã, se for o limite diário).");
+  if (/API key not valid|API_KEY_INVALID/i.test(detail)) throw new HttpError(502, "Chave do Google inválida. Cadastre de novo o secret GEMINI_API_KEY com a chave que começa com AIza.");
   if (res.status === 402 || /credit balance/i.test(detail))
     throw new HttpError(402, "Sem créditos na conta da Anthropic. Adicione créditos em console.anthropic.com → Billing.");
-  if (res.status === 401) throw new HttpError(502, `Chave da IA inválida (${detail || "não autorizada"}). Cadastre de novo o secret ANTHROPIC_API_KEY, sem espaços ou aspas.`);
+  if (res.status === 401) throw new HttpError(502, `Chave da IA inválida (${detail || "não autorizada"}). Confira o secret da chave de IA no Supabase.`);
   if (res.status === 403) throw new HttpError(502, `A chave da IA não tem permissão (${detail || "acesso negado"}).`);
   if (res.status === 404 && /model/i.test(detail)) throw new HttpError(502, `Modelo de IA indisponível para esta chave (${detail}).`);
   throw new HttpError(502, `Falha no provedor de IA (${res.status}${detail ? `: ${detail}` : ""}).`);
