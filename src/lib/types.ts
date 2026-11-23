@@ -45,6 +45,7 @@ export type MealPlan = {
   id: string;
   title: string;
   status: "active" | "archived";
+  day_type?: "padrao" | "vespera_corrida";
   target_calories: number | null;
   total_calories: number;
   protein_g: number;

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, Check, Copy, History, ListPlus, Pencil, Plus, RefreshCw, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { Archive, Check, Copy, Footprints, History, ListPlus, Pencil, Plus, RefreshCw, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { backend, isLocal } from "@/lib/backend";
 import { useAuth } from "@/hooks/useAuth";
 import { useAutosave, useData, logActivity } from "@/hooks/useData";
-import { getActivePlan, getPlanMeals, sumLogs, toggleMealDone } from "@/lib/nutrition";
+import { getActivePlan, getPlanMeals, nextDayRun, planDayType, sumLogs, toggleMealDone, type DayType } from "@/lib/nutrition";
 import type { FoodItem, Meal, MealLog, MealPlan, NutritionProfile } from "@/lib/types";
-import { ACTIVITY_LABEL, cn, fmtDate, fmtNum, GOAL_LABEL, MEAL_LABEL, toNum, today } from "@/lib/utils";
+import { ACTIVITY_LABEL, cn, fmtDate, fmtNum, GOAL_LABEL, MEAL_LABEL, RUN_TYPES, toNum, today } from "@/lib/utils";
 import { ageFromBirth, macroTargets, SECONDARY_GOALS, targetCalories } from "@/lib/calc";
 import { GROUP_LABEL, guessGroup, householdFor, matchFood, scaleFood, swapsFor, type FoodGroup, type Swap } from "@/lib/foods";
 import { Badge, Button, Card, CardTitle, Disclaimer, Empty, Field, Input, Modal, PageHeader, PageLoader, Progress, Select, Tabs, Textarea } from "@/components/ui";
@@ -71,16 +71,26 @@ async function recomputePlan(planId: string) {
 // ------------------------------------------------------------------ PLAN
 function PlanTab({ np, goProfile }: { np: NutritionProfile | null; goProfile: () => void }) {
   const { toast, confirm } = useFeedback();
+  const { profile } = useAuth();
   const { busy, run } = useAction();
   const date = today();
+  const runner = !!profile?.running_enabled;
+  const [chosen, setChosen] = useState<DayType | null>(null);
   const { data, loading, reload } = useData(async () => {
-    const plan = await getActivePlan();
-    if (!plan) return { plan: null, meals: [] as Meal[], foods: [] as FoodItem[], logs: [] as MealLog[] };
+    const nextRun = runner ? await nextDayRun() : null;
+    const actives = await backend.list<MealPlan>("meal_plans", { eq: { status: "active" } });
+    const hasVespera = actives.some((p) => planDayType(p) === "vespera_corrida");
+    // Automático: véspera de corrida quando há corrida amanhã e o cardápio existe
+    const type: DayType = chosen ?? (nextRun && hasVespera ? "vespera_corrida" : "padrao");
+    const plan = await getActivePlan(undefined, type);
+    const logs = await backend.list<MealLog>("meal_logs", { eq: { date } });
+    if (!plan) return { type, nextRun, hasVespera, plan: null, meals: [] as Meal[], foods: [] as FoodItem[], logs };
     const meals = await getPlanMeals(plan.id);
     const foods = meals.length ? await backend.list<FoodItem>("food_items", { in: { meal_id: meals.map((m) => m.id) }, order: [["position", "asc"]] }) : [];
-    const logs = await backend.list<MealLog>("meal_logs", { eq: { date } });
-    return { plan, meals, foods, logs };
-  }, [date]);
+    return { type, nextRun, hasVespera, plan, meals, foods, logs };
+  }, [date, chosen, runner]);
+  const dayType: DayType = data?.type ?? chosen ?? "padrao";
+  const runLabel = data?.nextRun ? `${(RUN_TYPES[data.nextRun.type] ?? data.nextRun.type).toLowerCase()} de ${fmtNum(data.nextRun.distance_km, 1)} km` : "";
   const [foodModal, setFoodModal] = useState<{ meal: Meal; food?: FoodItem } | null>(null);
   const [altFood, setAltFood] = useState<FoodItem | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
@@ -91,13 +101,21 @@ function PlanTab({ np, goProfile }: { np: NutritionProfile | null; goProfile: ()
       toast("Preencha seu perfil nutricional primeiro.", "info");
       return goProfile();
     }
-    if (data?.plan && !(await confirm({ title: "Gerar nova dieta?", text: "O plano atual será arquivado e continuará disponível no Histórico.", confirmLabel: "Gerar" }))) return;
+    const vespera = dayType === "vespera_corrida";
+    if (data?.plan && !(await confirm({ title: vespera ? "Gerar novo cardápio de véspera?" : "Gerar nova dieta?", text: "O cardápio atual será arquivado e continuará disponível no Histórico.", confirmLabel: "Gerar" }))) return;
     const r = await run(
       "gen",
-      () => backend.fn<{ plan_id: string; warnings: string[] }>("ai-nutrition", { action: "generate_plan" }),
+      () =>
+        backend.fn<{ plan_id: string; warnings: string[] }>("ai-nutrition", {
+          action: "generate_plan",
+          day_type: dayType,
+          next_run_km: data?.nextRun ? Number(data.nextRun.distance_km) : undefined,
+          next_run_label: runLabel || undefined,
+        }),
     );
     if (r) {
-      toast("Novo plano alimentar gerado!");
+      toast(vespera ? "Cardápio de véspera de corrida gerado!" : "Novo plano alimentar gerado!");
+      setChosen(dayType);
       r.warnings?.forEach((w) => toast(w, "info"));
       reload();
     }
@@ -119,6 +137,7 @@ function PlanTab({ np, goProfile }: { np: NutritionProfile | null; goProfile: ()
           fiber_g: p.fiber_g,
           notes: p.notes,
           source: p.source,
+          day_type: planDayType(p),
         });
         for (const m of data!.meals) {
           const { id, plan_id, ...rest } = m as any;
@@ -136,10 +155,46 @@ function PlanTab({ np, goProfile }: { np: NutritionProfile | null; goProfile: ()
       "Dieta salva no histórico.",
     );
 
+  const daySwitch = runner ? (
+    <div className="space-y-3">
+      <Tabs
+        value={dayType}
+        onChange={(t) => setChosen(t)}
+        items={[{ value: "padrao", label: "Dia normal" }, { value: "vespera_corrida", label: "Véspera de corrida" }]}
+      />
+      {data?.nextRun && (
+        <div className="flex items-start gap-3 rounded-2xl border border-brand/30 bg-brand/5 p-3 text-sm">
+          <Footprints className="mt-0.5 h-5 w-5 shrink-0 text-brand" />
+          <p>
+            <span className="font-semibold">Amanhã tem corrida ({runLabel}).</span>{" "}
+            {dayType === "vespera_corrida"
+              ? "Hoje siga o cardápio de véspera: mais carboidrato e jantar leve."
+              : data.hasVespera
+                ? <button className="font-semibold text-brand underline" onClick={() => setChosen("vespera_corrida")}>Usar o cardápio de véspera</button>
+                : "Gere o cardápio de véspera para chegar com energia."}
+          </p>
+        </div>
+      )}
+    </div>
+  ) : null;
+
   if (loading) return <PageLoader />;
   if (!data?.plan)
     return (
       <div className="space-y-4">
+        {daySwitch}
+        {dayType === "vespera_corrida" ? (
+          <Empty
+            icon={<Footprints className="h-8 w-8" />}
+            title="Cardápio de véspera de corrida"
+            text="Um cardápio separado para o dia antes de correr: mais carboidrato de fácil digestão, jantar com pouca fibra e gordura, e hidratação reforçada. O app passa a usar este cardápio sozinho sempre que houver corrida planejada para o dia seguinte."
+            action={
+              <Button onClick={generate} loading={busy === "gen"}>
+                <Wand2 className="h-4 w-4" /> Gerar cardápio de véspera
+              </Button>
+            }
+          />
+        ) : (
         <Empty
           icon={<Sparkles className="h-8 w-8" />}
           title="Nenhum plano alimentar ativo"
@@ -155,8 +210,9 @@ function PlanTab({ np, goProfile }: { np: NutritionProfile | null; goProfile: ()
             </div>
           }
         />
+        )}
         <Disclaimer>{DISCLAIMER}</Disclaimer>
-        <ManualPlanModal open={manualOpen} onClose={() => setManualOpen(false)} onCreated={reload} np={np} />
+        <ManualPlanModal open={manualOpen} onClose={() => setManualOpen(false)} onCreated={reload} np={np} dayType={dayType} />
       </div>
     );
 
@@ -165,18 +221,20 @@ function PlanTab({ np, goProfile }: { np: NutritionProfile | null; goProfile: ()
 
   return (
     <div className="space-y-4">
+      {daySwitch}
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-bold">{plan.title}</h2>
               <Badge tone="brand">{plan.source === "ai" ? "IA" : "Manual"}</Badge>
+              {dayType === "vespera_corrida" && <Badge tone="warn">Véspera de corrida</Badge>}
             </div>
             <p className="text-xs text-muted">Criado em {fmtDate(plan.created_at.slice(0, 10))}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={generate} loading={busy === "gen"}>
-              <Wand2 className="h-4 w-4" /> Gerar nova dieta
+              <Wand2 className="h-4 w-4" /> {dayType === "vespera_corrida" ? "Gerar novo cardápio" : "Gerar nova dieta"}
             </Button>
             <Button size="sm" variant="secondary" onClick={goProfile} title="Atualize o perfil e gere novamente">
               <RefreshCw className="h-4 w-4" /> Atualizar dieta
@@ -580,7 +638,7 @@ function AlternativesModal({ food, onClose, onSaved, onAI }: { food: FoodItem | 
   );
 }
 
-function ManualPlanModal({ open, onClose, onCreated, np }: { open: boolean; onClose: () => void; onCreated: () => void; np: NutritionProfile | null }) {
+function ManualPlanModal({ open, onClose, onCreated, np, dayType = "padrao" }: { open: boolean; onClose: () => void; onCreated: () => void; np: NutritionProfile | null; dayType?: DayType }) {
   const { profile } = useAuth();
   const [title, setTitle] = useState("Meu plano alimentar");
   const [types, setTypes] = useState<string[]>(["cafe_manha", "lanche_manha", "almoco", "lanche_tarde", "jantar"]);
@@ -593,8 +651,8 @@ function ManualPlanModal({ open, onClose, onCreated, np }: { open: boolean; onCl
         const age = ageFromBirth(profile?.birth_date);
         const base = targetCalories({ ...profile, age, activity_level: np?.activity_level ?? profile?.activity_level, goal: np?.goal, running_km_week: np?.running_km_per_week });
         const kcal = base && profile?.weight_kg ? macroTargets(base, profile.weight_kg, np?.goal, { secondary_goals: np?.secondary_goals, running_km_week: np?.running_km_per_week }).kcal : base;
-        for (const a of await backend.list<MealPlan>("meal_plans", { eq: { status: "active" } })) await backend.update("meal_plans", a.id, { status: "archived" });
-        const plan = await backend.insert<MealPlan>("meal_plans", { title: title.trim() || "Meu plano", status: "active", target_calories: kcal, source: "manual" });
+        for (const a of await backend.list<MealPlan>("meal_plans", { eq: { status: "active" } })) if (planDayType(a) === dayType) await backend.update("meal_plans", a.id, { status: "archived" });
+        const plan = await backend.insert<MealPlan>("meal_plans", { title: title.trim() || "Meu plano", status: "active", target_calories: kcal, source: "manual", day_type: dayType });
         const order = Object.keys(MEAL_LABEL).filter((t) => types.includes(t));
         await backend.insertMany(
           "meals",
@@ -1023,6 +1081,7 @@ function HistoryTab({ onActivated }: { onActivated: () => void }) {
             <div className="flex items-center gap-2">
               <p className="font-semibold">{p.title}</p>
               {p.status === "active" ? <Badge tone="brand">Ativo</Badge> : <Badge>Arquivado</Badge>}
+              {planDayType(p) === "vespera_corrida" && <Badge tone="warn">Véspera de corrida</Badge>}
             </div>
             <p className="text-xs text-muted">
               {fmtDate(p.created_at.slice(0, 10))} · {fmtNum(p.total_calories)} kcal · P {fmtNum(p.protein_g)}g · C {fmtNum(p.carbs_g)}g · G {fmtNum(p.fat_g)}g
@@ -1039,7 +1098,7 @@ function HistoryTab({ onActivated }: { onActivated: () => void }) {
                 loading={busy === `act-${p.id}`}
                 onClick={() =>
                   run(`act-${p.id}`, async () => {
-                    const active = data.find((x) => x.status === "active");
+                    const active = data.find((x) => x.status === "active" && planDayType(x) === planDayType(p));
                     if (active) await backend.update("meal_plans", active.id, { status: "archived" });
                     await backend.update("meal_plans", p.id, { status: "active" });
                     onActivated();

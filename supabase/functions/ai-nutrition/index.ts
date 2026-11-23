@@ -122,6 +122,18 @@ Deno.serve(handle(async (req) => {
     }
     const base = targetCalories({ sex: profile.sex, age, height_cm: profile.height_cm, weight_kg: profile.weight_kg, activity_level: np.activity_level ?? profile.activity_level, goal, running_km_week: np.running_km_per_week })!;
     const macros = macroTargets(base, Number(profile.weight_kg), goal, { secondary_goals: np.secondary_goals, running_km_week: np.running_km_per_week });
+    // Cardápio da véspera de corrida: mais carboidrato, menos gordura e fibra no fim do dia
+    const dayType = body.day_type === "vespera_corrida" ? "vespera_corrida" : "padrao";
+    const kg = Number(profile.weight_kg);
+    if (dayType === "vespera_corrida") {
+      const longKm = Number(body.next_run_km) || 0;
+      const carbs = Math.max(macros.carbs, Math.round(kg * (longKm >= 15 ? 8 : 7)));
+      const fat = Math.max(Math.round(kg * 0.7), macros.fat - Math.round(((carbs - macros.carbs) * 4 * 0.5) / 9));
+      macros.carbs = carbs;
+      macros.fat = fat;
+      macros.fiber = Math.min(macros.fiber, 25);
+      macros.kcal = Math.round((macros.protein * 4 + carbs * 4 + fat * 9) / 10) * 10;
+    }
     const kcal = macros.kcal;
     const perf = (np.secondary_goals ?? []).some((g: string) => g === "performance_corrida" || g === "resistencia") || Number(np.running_km_per_week) > 0;
     const sportRules = [
@@ -130,6 +142,16 @@ Deno.serve(handle(async (req) => {
       perf && "Nas notas, explique como ajustar em dias de corrida longa (mais carboidrato e hidratação com eletrólitos) e em dias de descanso (reduzir um pouco o carboidrato, manter a proteína).",
       np.training_time && `Posicione as refeições pré e pós-treino de acordo com o horário dos treinos (${np.training_time}) e nomeie essas refeições indicando "pré-treino" ou "pós-treino" quando aplicável.`,
       np.supplements && "Não prescreva suplementos; apenas considere os que o usuário já usa ao montar as refeições.",
+      ...(dayType === "vespera_corrida"
+        ? [
+            `ESTE É O CARDÁPIO DA VÉSPERA DE CORRIDA${body.next_run_label ? ` (amanhã: ${String(body.next_run_label).slice(0, 60)})` : ""}. Objetivo: chegar com o glicogênio cheio e o intestino tranquilo.`,
+            "Aumente os carboidratos de fácil digestão ao longo do dia (arroz branco, massas, batatas, pães, tapioca, frutas como banana), distribuídos em todas as refeições, sem refeições exageradas à noite.",
+            "No jantar e na ceia: pouca fibra, pouca gordura e nada de frituras. Evite leguminosas em grande quantidade, crucíferas (brócolis, couve-flor, repolho), alimentos muito condimentados ou que o usuário não costuma comer. Nada de álcool.",
+            "Mantenha a proteína moderada e magra. Inclua orientação de hidratação ao longo do dia (água e, se a corrida for longa, um pouco de sódio/eletrólitos).",
+            "Nas notas, explique em 2–3 frases por que este dia é diferente e dê uma sugestão de café da manhã pré-corrida para o dia seguinte (1–3 h antes: carboidrato simples e familiar, ex.: pão com mel, banana).",
+            "Nomeie o título começando com \"Véspera de corrida\".",
+          ]
+        : []),
     ].filter(Boolean).join("\n- ");
     const mealsPerDay = Math.min(6, Math.max(3, np.meals_per_day ?? 5));
     const mealTypes =
@@ -163,7 +185,7 @@ Formato JSON:
     const planTotals = totals(meals as any);
 
     // Arquiva o plano ativo anterior (fica disponível no histórico)
-    await supabase.from("meal_plans").update({ status: "archived" }).eq("user_id", userId).eq("status", "active");
+    await supabase.from("meal_plans").update({ status: "archived" }).eq("user_id", userId).eq("status", "active").eq("day_type", dayType);
 
     const { data: plan, error: planErr } = await supabase.from("meal_plans").insert({
       user_id: userId,
@@ -177,6 +199,7 @@ Formato JSON:
       fiber_g: planTotals.fiber_g,
       notes: [typeof ai.notes === "string" ? ai.notes : "", ...warnings].filter(Boolean).join("\n\n"),
       source: "ai",
+      day_type: dayType,
     }).select().single();
     if (planErr) throw new HttpError(500, planErr.message);
 
@@ -188,8 +211,8 @@ Formato JSON:
       if (fErr) throw new HttpError(500, fErr.message);
     }
 
-    await supabase.from("ai_interactions").insert({ user_id: userId, kind: "dieta", request: { kcal, macros, goal }, response: ai, status: "done" });
-    await supabase.from("daily_activity").insert({ user_id: userId, kind: "dieta", title: "Novo plano alimentar gerado", ref_id: plan.id });
+    await supabase.from("ai_interactions").insert({ user_id: userId, kind: "dieta", request: { kcal, macros, goal, day_type: dayType }, response: ai, status: "done" });
+    await supabase.from("daily_activity").insert({ user_id: userId, kind: "dieta", title: dayType === "vespera_corrida" ? "Cardápio de véspera de corrida gerado" : "Novo plano alimentar gerado", ref_id: plan.id });
     return json({ plan_id: plan.id, warnings });
   }
 

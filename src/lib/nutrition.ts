@@ -1,10 +1,28 @@
 import { backend } from "./backend";
-import type { Meal, MealLog, MealPlan } from "./types";
+import type { Meal, MealLog, MealPlan, RunningSession } from "./types";
+import { addDays, today } from "./utils";
 import { logActivity } from "@/hooks/useData";
 
-export async function getActivePlan(ownerId?: string) {
-  const rows = await backend.list<MealPlan>("meal_plans", { eq: { status: "active" }, ownerId, limit: 1 });
-  return rows[0] ?? null;
+export type DayType = "padrao" | "vespera_corrida";
+export const DAY_TYPE_LABEL: Record<DayType, string> = { padrao: "Dia normal", vespera_corrida: "Véspera de corrida" };
+export const planDayType = (p: Pick<MealPlan, "day_type">): DayType => (p.day_type === "vespera_corrida" ? "vespera_corrida" : "padrao");
+
+/** Corrida planejada para amanhã (se houver): define se hoje é véspera de corrida. */
+export async function nextDayRun(ownerId?: string): Promise<RunningSession | null> {
+  const tomorrow = addDays(today(), 1);
+  const runs = await backend.list<RunningSession>("running_sessions", { eq: { date: tomorrow, status: "planned" }, ownerId }).catch(() => []);
+  return runs.sort((a, b) => Number(b.distance_km) - Number(a.distance_km))[0] ?? null;
+}
+
+/**
+ * Plano ativo. Sem `dayType`, escolhe sozinho: se amanhã tem corrida planejada e existe o cardápio de véspera, usa ele.
+ */
+export async function getActivePlan(ownerId?: string, dayType?: DayType) {
+  const rows = await backend.list<MealPlan>("meal_plans", { eq: { status: "active" }, ownerId });
+  const of = (t: DayType) => rows.find((p) => planDayType(p) === t) ?? null;
+  if (dayType) return of(dayType);
+  if (of("vespera_corrida") && (await nextDayRun(ownerId))) return of("vespera_corrida");
+  return of("padrao") ?? rows[0] ?? null;
 }
 
 export async function getPlanMeals(planId: string, ownerId?: string) {
