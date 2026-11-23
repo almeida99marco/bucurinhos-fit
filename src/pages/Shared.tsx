@@ -9,7 +9,7 @@ import { AreaTrend } from "@/components/charts";
 import { PlanViewer } from "./Nutrition";
 import { PhotoImg } from "./Progress";
 
-const SCOPE_LABEL: Record<string, string> = { evolucao: "Evolução", fotos: "Fotos", treinos: "Treinos", corrida: "Corrida", nutricao: "Nutrição" };
+const SCOPE_LABEL: Record<string, string> = { evolucao: "Evolução", fotos: "Fotos", treinos: "Treinos", corrida: "Corrida", nutricao: "Nutrição", mural: "Mural" };
 
 type Share = { id: string; full_name: string; email: string; direction: string; scopes: string[] };
 

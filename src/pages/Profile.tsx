@@ -318,7 +318,7 @@ function RemindersCard() {
   );
 }
 
-const SCOPES: Record<string, string> = { evolucao: "Evolução (peso e medidas)", fotos: "Fotos de evolução", treinos: "Treinos de musculação", corrida: "Corridas", nutricao: "Nutrição" };
+const SCOPES: Record<string, string> = { evolucao: "Evolução (peso e medidas)", fotos: "Fotos de evolução", treinos: "Treinos de musculação", corrida: "Corridas", nutricao: "Nutrição", mural: "Mural (posts, curtidas e comentários)" };
 
 function SharingCard() {
   const { data, reload } = useData(() => backend.rpc<any[]>("shared_profiles", {}), []);

@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { Bot, CalendarDays, Dumbbell, Footprints, Home, LineChart, Salad, User, Users } from "lucide-react";
+import { Bot, CalendarDays, Dumbbell, Footprints, Home, Images, LineChart, Salad, User, Users } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { isLocal } from "@/lib/backend";
 import { cn } from "@/lib/utils";
@@ -32,6 +32,7 @@ export default function Layout() {
     { to: "/treinos", label: "Treinos", icon: Dumbbell },
     ...(profile?.running_enabled ? [{ to: "/corrida", label: "Corrida", icon: Footprints }] : []),
     { to: "/evolucao", label: "Evolução", icon: LineChart },
+    { to: "/mural", label: "Mural", icon: Images },
     { to: "/perfil", label: "Perfil", icon: User },
   ];
   const extra = [
@@ -106,7 +107,7 @@ export default function Layout() {
                 key={i.to}
                 to={i.to}
                 end={i.to === "/"}
-                className={({ isActive }) => cn("flex flex-1 flex-col items-center gap-1 py-2.5 text-[10px] font-medium", isActive ? "text-brand" : "text-muted")}
+                className={({ isActive }) => cn("flex min-w-0 flex-1 flex-col items-center gap-1 py-2.5 text-[10px] font-medium tracking-tight", isActive ? "text-brand" : "text-muted")}
               >
                 <i.icon className="h-5 w-5" />
                 {i.label}

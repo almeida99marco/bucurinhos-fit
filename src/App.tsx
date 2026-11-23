@@ -18,6 +18,7 @@ const ProfilePage = lazy(() => import("@/pages/Profile"));
 const CalendarPage = lazy(() => import("@/pages/Calendar"));
 const Assistant = lazy(() => import("@/pages/Assistant"));
 const Shared = lazy(() => import("@/pages/Shared"));
+const Mural = lazy(() => import("@/pages/Mural"));
 
 function Protected() {
   const { user, profile, loading, recovery } = useAuth();
@@ -63,6 +64,7 @@ export default function App() {
                 <Route path="calendario" element={<CalendarPage />} />
                 <Route path="assistente" element={<Assistant />} />
                 <Route path="compartilhados" element={<Shared />} />
+                <Route path="mural" element={<Mural />} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
