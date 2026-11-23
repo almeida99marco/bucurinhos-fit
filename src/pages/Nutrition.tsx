@@ -7,6 +7,7 @@ import { getActivePlan, getPlanMeals, sumLogs, toggleMealDone } from "@/lib/nutr
 import type { FoodItem, Meal, MealLog, MealPlan, NutritionProfile } from "@/lib/types";
 import { ACTIVITY_LABEL, cn, fmtDate, fmtNum, GOAL_LABEL, MEAL_LABEL, toNum, today } from "@/lib/utils";
 import { ageFromBirth, macroTargets, SECONDARY_GOALS, targetCalories } from "@/lib/calc";
+import { GROUP_LABEL, guessGroup, householdFor, matchFood, scaleFood, swapsFor, type FoodGroup, type Swap } from "@/lib/foods";
 import { Badge, Button, Card, CardTitle, Disclaimer, Empty, Field, Input, Modal, PageHeader, PageLoader, Progress, Select, Tabs, Textarea } from "@/components/ui";
 import { useAction, useFeedback } from "@/components/feedback";
 import { WaterCard } from "@/components/WaterCard";
@@ -265,8 +266,8 @@ function PlanTab({ np, goProfile }: { np: NutritionProfile | null; goProfile: ()
                 <tbody className="divide-y divide-line">
                   {mf.map((f) => (
                     <tr key={f.id}>
-                      <td className="py-2 pr-2">
-                        <p>{f.name}</p>
+                      <td className="cursor-pointer py-2 pr-2" onClick={() => setAltFood(f)}>
+                        <p className="underline decoration-line decoration-dotted underline-offset-4">{f.name}</p>
                         {f.household_measure && <p className="text-[11px] text-muted">{f.household_measure}</p>}
                       </td>
                       <td className="py-2 text-right text-muted">{fmtNum(f.quantity_g)} g</td>
@@ -310,7 +311,12 @@ function PlanTab({ np, goProfile }: { np: NutritionProfile | null; goProfile: ()
       <AlternativesModal
         food={altFood}
         onClose={() => setAltFood(null)}
-        onDone={() => {
+        onSaved={async (mealId) => {
+          await recomputeMeal(mealId);
+          await recomputePlan(plan.id);
+          reload();
+        }}
+        onAI={() => {
           setAltFood(null);
           reload();
         }}
@@ -427,45 +433,148 @@ function FoodModal({ state, onClose, onSaved }: { state: { meal: Meal; food?: Fo
   );
 }
 
-function AlternativesModal({ food, onClose, onDone }: { food: FoodItem | null; onClose: () => void; onDone: () => void }) {
+function AlternativesModal({ food, onClose, onSaved, onAI }: { food: FoodItem | null; onClose: () => void; onSaved: (mealId: string) => Promise<void>; onAI: () => void }) {
+  const [tab, setTab] = useState<"trocar" | "quantidade" | "ia">("trocar");
+  const [query, setQuery] = useState("");
+  const [group, setGroup] = useState<FoodGroup | "todos">("todos");
+  const [qty, setQty] = useState("");
   const [pref, setPref] = useState("");
   const { busy, run } = useAction();
-  useEffect(() => setPref(""), [food]);
+  const baseGroup = useMemo(() => (food ? guessGroup(food) : "carboidrato"), [food]);
+  useEffect(() => {
+    setTab("trocar");
+    setQuery("");
+    setPref("");
+    setQty(food ? String(food.quantity_g ?? "") : "");
+    setGroup(food ? guessGroup(food) : "todos");
+  }, [food]);
+  const swaps = useMemo(() => {
+    if (!food) return [];
+    return swapsFor(food, baseGroup, { query: query.trim() || undefined, anyGroup: group === "todos" }).filter((s) => query.trim() || group === "todos" || s.food.group === group).slice(0, 40);
+  }, [food, baseGroup, query, group]);
   if (!food) return null;
-  const substitute = (preferred?: string) =>
-    run("sub", async () => {
-      await backend.fn("ai-nutrition", { action: "substitute_food", food_item_id: food.id, preferred });
-      onDone();
+
+  const keepAlts = () => [{ name: food.name, quantity_g: food.quantity_g }, ...(food.alternatives ?? [])].filter((a, i, arr) => arr.findIndex((x) => x.name === a.name) === i).slice(0, 4);
+  const apply = (s: Swap) =>
+    run("swap", async () => {
+      await backend.update("food_items", food.id, {
+        name: s.food.name, quantity_g: s.quantity_g, household_measure: s.household_measure,
+        calories: s.calories, protein_g: s.protein_g, carbs_g: s.carbs_g, fat_g: s.fat_g, fiber_g: s.fiber_g,
+        alternatives: keepAlts(),
+      });
+      await onSaved(food.meal_id);
+      onClose();
+    }, `Trocado por ${s.food.name}.`);
+  const newQty = toNum(qty) ?? 0;
+  const scaled = scaleFood(food, newQty);
+  const saveQty = () =>
+    run("qty", async () => {
+      if (newQty <= 0) throw new Error("Informe a quantidade em gramas.");
+      const ref = matchFood(food.name);
+      await backend.update("food_items", food.id, { ...scaled, household_measure: ref ? householdFor(ref, newQty) : food.household_measure });
+      await onSaved(food.meal_id);
+      onClose();
+    }, "Quantidade ajustada.");
+  const withAI = () =>
+    run("ai", async () => {
+      await backend.fn("ai-nutrition", { action: "substitute_food", food_item_id: food.id, preferred: pref.trim() || undefined });
+      onAI();
     }, "Alimento substituído.");
+
   return (
-    <Modal open onClose={onClose} title={`Substituir: ${food.name}`}>
+    <Modal open onClose={onClose} title="Substituir alimento">
       <div className="space-y-4">
-        {food.alternatives?.length ? (
-          <div>
-            <p className="mb-2 text-xs text-muted">Alternativas equivalentes sugeridas</p>
-            <div className="space-y-2">
-              {food.alternatives.map((a, i) => (
-                <div key={i} className="flex items-center justify-between rounded-xl bg-surface2 p-3 text-sm">
-                  <span>
-                    {a.name} <span className="text-muted">· {fmtNum(a.quantity_g)} g</span>
+        <div className="rounded-xl bg-surface2 p-3">
+          <p className="font-semibold">{food.name}</p>
+          <p className="text-xs text-muted">
+            {fmtNum(food.quantity_g)} g{food.household_measure ? ` (${food.household_measure})` : ""} · {fmtNum(food.calories)} kcal · P {fmtNum(food.protein_g, 1)} · C {fmtNum(food.carbs_g, 1)} · G {fmtNum(food.fat_g, 1)}
+          </p>
+        </div>
+        <Tabs value={tab} onChange={setTab} items={[{ value: "trocar", label: "Trocar alimento" }, { value: "quantidade", label: "Quantidade" }, { value: "ia", label: "Pedir à IA" }]} />
+
+        {tab === "trocar" && (
+          <div className="space-y-3">
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar alimento (ex.: tapioca, ovo)" />
+            {!query && (
+              <div className="no-scrollbar -mx-1 flex gap-1.5 overflow-x-auto px-1">
+                {(["todos", ...Object.keys(GROUP_LABEL)] as (FoodGroup | "todos")[]).map((g) => (
+                  <button key={g} onClick={() => setGroup(g)} className={cn("whitespace-nowrap rounded-full border px-3 py-1 text-xs font-medium", group === g ? "border-brand bg-brand text-onbrand" : "border-line text-muted")}>
+                    {g === "todos" ? "Mais parecidos" : GROUP_LABEL[g]}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-[11px] text-muted">
+              Porções calculadas para manter {group === baseGroup || group === "todos" ? `o mesmo valor do grupo ${GROUP_LABEL[baseGroup].toLowerCase()}` : "as mesmas calorias"}. Toque para trocar.
+            </p>
+            <div className="max-h-[45vh] space-y-2 overflow-y-auto">
+              {swaps.length === 0 && <p className="py-4 text-center text-sm text-muted">Nenhum alimento encontrado. Tente a aba "Pedir à IA".</p>}
+              {swaps.map((s) => (
+                <button key={s.food.name} onClick={() => apply(s)} disabled={busy === "swap"} className="flex w-full items-center gap-3 rounded-xl border border-line p-3 text-left transition active:scale-[0.99] hover:border-brand/50">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{s.food.name}</p>
+                    <p className="text-xs text-brand">
+                      {fmtNum(s.quantity_g)} g{s.household_measure ? ` · ≈ ${s.household_measure}` : ""}
+                    </p>
+                    <p className="text-[11px] text-muted">
+                      {fmtNum(s.calories)} kcal · P {fmtNum(s.protein_g, 1)} · C {fmtNum(s.carbs_g, 1)} · G {fmtNum(s.fat_g, 1)}
+                    </p>
+                  </div>
+                  <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold", Math.abs(s.diffKcal) <= 15 ? "bg-brand-soft text-brand" : "bg-surface2 text-muted")}>
+                    {s.diffKcal > 0 ? "+" : ""}
+                    {s.diffKcal} kcal
                   </span>
-                  <Button size="sm" variant="secondary" onClick={() => substitute(`${a.name} (${a.quantity_g} g)`)} loading={busy === "sub"}>
-                    Usar
-                  </Button>
-                </div>
+                </button>
               ))}
             </div>
+            <p className="text-[10px] text-muted">Valores aproximados (tabela TACO/USDA). Os totais da refeição e do dia são recalculados automaticamente.</p>
           </div>
-        ) : (
-          <p className="text-sm text-muted">Sem alternativas salvas para este alimento.</p>
         )}
-        <Field label="Ou descreva o que prefere (opcional)">
-          <Input value={pref} onChange={(e) => setPref(e.target.value)} placeholder="Ex.: algo sem lactose, tapioca..." />
-        </Field>
-        <Button className="w-full" onClick={() => substitute(pref || undefined)} loading={busy === "sub"}>
-          <Sparkles className="h-4 w-4" /> Substituir com IA
-        </Button>
-        <p className="text-[11px] text-muted">A IA recalcula os valores nutricionais e atualiza os totais da refeição e do dia.</p>
+
+        {tab === "quantidade" && (
+          <div className="space-y-3">
+            <Field label="Nova quantidade (g)">
+              <Input inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} />
+            </Field>
+            <div className="flex gap-2">
+              {[0.5, 0.75, 1.25, 1.5].map((k) => (
+                <Button key={k} size="sm" variant="secondary" className="flex-1" onClick={() => setQty(String(Math.round(food.quantity_g * k)))}>
+                  {k === 0.5 ? "½×" : k === 0.75 ? "¾×" : k === 1.25 ? "1¼×" : "1½×"}
+                </Button>
+              ))}
+            </div>
+            <div className="rounded-xl bg-surface2 p-3 text-sm">
+              {fmtNum(scaled.calories)} kcal · P {fmtNum(scaled.protein_g, 1)} g · C {fmtNum(scaled.carbs_g, 1)} g · G {fmtNum(scaled.fat_g, 1)} g
+            </div>
+            <Button className="w-full" onClick={saveQty} loading={busy === "qty"}>
+              Salvar quantidade
+            </Button>
+          </div>
+        )}
+
+        {tab === "ia" && (
+          <div className="space-y-3">
+            {food.alternatives?.length ? (
+              <div>
+                <p className="mb-2 text-xs text-muted">Sugestões salvas para este alimento</p>
+                <div className="flex flex-wrap gap-2">
+                  {food.alternatives.map((a, i) => (
+                    <button key={i} onClick={() => setPref(`${a.name} (${a.quantity_g} g)`)} className="rounded-full border border-line px-3 py-1 text-xs">
+                      {a.name} · {fmtNum(a.quantity_g)} g
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <Field label="Por qual alimento quer trocar?">
+              <Input value={pref} onChange={(e) => setPref(e.target.value)} placeholder="Ex.: cuscuz, algo sem lactose…" />
+            </Field>
+            <Button className="w-full" onClick={withAI} loading={busy === "ai"}>
+              <Sparkles className="h-4 w-4" /> Substituir com IA
+            </Button>
+            <p className="text-[11px] text-muted">Use para alimentos que não estão na lista. A IA calcula a porção equivalente e os valores nutricionais.</p>
+          </div>
+        )}
       </div>
     </Modal>
   );
