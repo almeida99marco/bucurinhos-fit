@@ -49,7 +49,7 @@ export class HttpError extends Error {
  *   3. LOVABLE_API_KEY → AI Gateway do Lovable Cloud (padrão quando nada mais é configurado).
  */
 export async function callAI(system: string, user: string): Promise<any> {
-  const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
+  const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY")?.trim().replace(/^["']|["']$/g, "");
   let content = "";
   if (anthropicKey) {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -101,11 +101,22 @@ export async function callAI(system: string, user: string): Promise<any> {
 
 async function assertOk(res: Response) {
   if (res.ok) return;
+  // Mensagem do provedor (nunca contém a chave) para facilitar o diagnóstico
+  let detail = "";
+  try {
+    const body = await res.json();
+    detail = String(body?.error?.message ?? body?.message ?? "").slice(0, 200);
+  } catch {
+    /* sem corpo JSON */
+  }
+  console.error("AI error", res.status, detail);
   if (res.status === 429) throw new HttpError(429, "Limite de uso da IA atingido. Tente novamente em instantes.");
-  if (res.status === 402) throw new HttpError(402, "Créditos de IA esgotados. Verifique o plano do provedor de IA.");
-  if (res.status === 401 || res.status === 403) throw new HttpError(502, "Chave da IA inválida ou sem permissão. Verifique os secrets.");
-  console.error("AI error", res.status, await res.text().catch(() => ""));
-  throw new HttpError(502, `Falha no provedor de IA (${res.status}).`);
+  if (res.status === 402 || /credit balance/i.test(detail))
+    throw new HttpError(402, "Sem créditos na conta da Anthropic. Adicione créditos em console.anthropic.com → Billing.");
+  if (res.status === 401) throw new HttpError(502, `Chave da IA inválida (${detail || "não autorizada"}). Cadastre de novo o secret ANTHROPIC_API_KEY, sem espaços ou aspas.`);
+  if (res.status === 403) throw new HttpError(502, `A chave da IA não tem permissão (${detail || "acesso negado"}).`);
+  if (res.status === 404 && /model/i.test(detail)) throw new HttpError(502, `Modelo de IA indisponível para esta chave (${detail}).`);
+  throw new HttpError(502, `Falha no provedor de IA (${res.status}${detail ? `: ${detail}` : ""}).`);
 }
 
 export function handle(fn: (req: Request) => Promise<Response>) {
