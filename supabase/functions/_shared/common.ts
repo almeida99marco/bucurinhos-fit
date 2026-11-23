@@ -73,7 +73,10 @@ async function openAICompat(url: string, key: string, models: string[], system: 
       return data?.choices?.[0]?.message?.content ?? "";
     }
     last = res;
-    if (res.status !== 404) break; // só troca de modelo quando ele não existe
+    // Modelo inexistente, sobrecarregado ou com limite esgotado: tenta o próximo da lista
+    if (![404, 429, 500, 503].includes(res.status)) break;
+    await res.body?.cancel().catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 400));
   }
   await assertOk(last!);
   return "";
@@ -84,7 +87,7 @@ export async function callAI(system: string, user: string): Promise<any> {
   const anthropicKey = clean(Deno.env.get("ANTHROPIC_API_KEY"));
   let content = "";
   if (geminiKey) {
-    const models = [Deno.env.get("AI_MODEL"), "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest"].filter(Boolean) as string[];
+    const models = [Deno.env.get("AI_MODEL"), "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"].filter(Boolean) as string[];
     content = await openAICompat("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiKey, models, system, user);
   } else if (anthropicKey) {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -131,6 +134,7 @@ async function assertOk(res: Response) {
     /* sem corpo JSON */
   }
   console.error("AI error", res.status, detail);
+  if (res.status === 503 || res.status === 500) throw new HttpError(503, "A IA gratuita está sobrecarregada agora. Tente de novo em alguns minutos.");
   if (res.status === 429) throw new HttpError(429, "Limite gratuito da IA atingido por agora. Tente de novo em alguns minutos (ou amanhã, se for o limite diário).");
   if (/API key not valid|API_KEY_INVALID/i.test(detail)) throw new HttpError(502, "Chave do Google inválida. Cadastre de novo o secret GEMINI_API_KEY com a chave que começa com AIza.");
   if (res.status === 402 || /credit balance/i.test(detail))
