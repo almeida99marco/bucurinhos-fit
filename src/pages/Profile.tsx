@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Bell, Camera, Download, FileText, KeyRound, LogOut, Plus, Share2, Target, Trash2, UserCog } from "lucide-react";
+import { Bell, Camera, Download, FileText, KeyRound, LogOut, Plus, Share2, ShieldCheck, Target, Trash2, UserCog } from "lucide-react";
 import { backend, isClaude, isLocal } from "@/lib/backend";
 import { useAuth } from "@/hooks/useAuth";
 import { useData } from "@/hooks/useData";
@@ -94,6 +94,7 @@ export default function ProfilePage() {
         </div>
       </div>
 
+      {!isClaude && !isLocal && <AdminCard />}
       {isClaude ? <ClaudeSharingCard /> : <SharingCard />}
       <ReportsCard />
       {!isClaude && <SecurityCard />}
@@ -577,6 +578,59 @@ function SecurityCard() {
         </Button>
       </div>
       {isLocal && <p className="mt-2 text-[11px] text-muted">Prévia local: dados e senhas ficam apenas neste navegador.</p>}
+    </Card>
+  );
+}
+
+type AllowedEmail = { email: string; created_at: string; has_account: boolean; is_admin: boolean };
+
+/** Visível só para o administrador: controla quem pode criar conta no app. */
+function AdminCard() {
+  const { data: admin } = useData(() => backend.rpc<boolean>("is_admin", {}).catch(() => false), []);
+  const { data, reload } = useData(() => (admin ? backend.rpc<AllowedEmail[]>("admin_list_emails", {}) : Promise.resolve([] as AllowedEmail[])), [admin]);
+  const [email, setEmail] = useState("");
+  const { busy, run } = useAction();
+  const { confirm } = useFeedback();
+  if (!admin) return null;
+  const add = () =>
+    run("add", async () => {
+      await backend.rpc("admin_add_email", { p_email: email });
+      setEmail("");
+      reload();
+    }, "E-mail liberado. Agora essa pessoa já pode criar a conta.");
+  const remove = async (e: AllowedEmail) => {
+    const ok = await confirm({
+      title: "Remover este e-mail?",
+      text: e.has_account ? "A conta que já existe continua funcionando; só impede novos cadastros com este e-mail." : "Esta pessoa não poderá mais criar conta no app.",
+      confirmLabel: "Remover",
+      danger: true,
+    });
+    if (ok) run("rm" + e.email, async () => { await backend.rpc("admin_remove_email", { p_email: e.email }); reload(); }, "E-mail removido.");
+  };
+  return (
+    <Card>
+      <CardTitle icon={<ShieldCheck className="h-4 w-4 text-brand" />}>Administração do app</CardTitle>
+      <p className="mb-4 text-sm text-muted">Você é o administrador. Só os e-mails desta lista conseguem criar conta no Bucurinho's Fit; qualquer outro cadastro é bloqueado pelo servidor.</p>
+      <form className="mb-4 flex gap-2" onSubmit={(ev) => { ev.preventDefault(); add(); }}>
+        <Input type="email" inputMode="email" autoCapitalize="none" value={email} onChange={(ev) => setEmail(ev.target.value)} placeholder="email da pessoa" />
+        <Button type="submit" loading={busy === "add"} disabled={!email.includes("@")}>Liberar</Button>
+      </form>
+      <div className="space-y-2">
+        {(data ?? []).map((e) => (
+          <div key={e.email} className="flex items-center gap-3 rounded-xl bg-surface2 p-3">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{e.email}</p>
+              <div className="mt-1 flex gap-1">
+                {e.is_admin && <Badge tone="brand">Administrador</Badge>}
+                {e.has_account ? <Badge>Conta criada</Badge> : <Badge tone="warn">Aguardando cadastro</Badge>}
+              </div>
+            </div>
+            {!e.is_admin && (
+              <Button size="sm" variant="ghost" loading={busy === "rm" + e.email} onClick={() => remove(e)}>Remover</Button>
+            )}
+          </div>
+        ))}
+      </div>
     </Card>
   );
 }

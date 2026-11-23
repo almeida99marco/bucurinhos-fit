@@ -92,6 +92,9 @@ function supabaseBackend(url: string, key: string): Backend {
           password,
           options: { data: meta, emailRedirectTo: appUrl() },
         });
+        // O banco recusa e-mails fora da lista do administrador (app privado)
+        if (error && /database error saving new user|APP_PRIVADO/i.test(error.message))
+          throw new Error("Este app é privado. Peça ao administrador para liberar o seu e-mail e tente de novo.");
         fail(error);
         return { needsConfirmation: !data.session };
       },
