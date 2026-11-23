@@ -1,6 +1,6 @@
 // Utilidades compartilhadas pelas Edge Functions de IA.
 // A chave da API de IA fica somente no servidor (secrets do Supabase), nunca no frontend.
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -19,10 +19,18 @@ export function json(body: unknown, status = 200) {
 export async function getUserClient(req: Request): Promise<{ supabase: SupabaseClient; userId: string }> {
   const auth = req.headers.get("Authorization");
   if (!auth) throw new HttpError(401, "Não autenticado");
-  const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+  let key = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+  try {
+    key = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") ?? "{}").default ?? key;
+  } catch {
+    /* usa a chave legada */
+  }
+  const supabase = createClient(Deno.env.get("SUPABASE_URL")!, key, {
     global: { headers: { Authorization: auth } },
+    auth: { persistSession: false },
   });
-  const { data, error } = await supabase.auth.getUser();
+  // Valida o token do usuário no Supabase Auth (a função é publicada com verify_jwt = false)
+  const { data, error } = await supabase.auth.getUser(auth.replace(/^Bearer\s+/i, ""));
   if (error || !data.user) throw new HttpError(401, "Sessão inválida");
   return { supabase, userId: data.user.id };
 }

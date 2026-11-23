@@ -1,0 +1,6 @@
+# As funções validam o usuário no próprio código (compatível com as novas chaves do Supabase)
+[functions.ai-nutrition]
+verify_jwt = false
+
+[functions.ai-coach]
+verify_jwt = false
