@@ -5,6 +5,12 @@ import { initAccent } from "./lib/theme";
 import { initBackend } from "./lib/backend";
 
 initAccent();
+// iPhone: o Safari ignora "user-scalable=no", então bloqueia o gesto de pinça diretamente
+for (const ev of ["gesturestart", "gesturechange", "gestureend"]) {
+  document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+}
+document.addEventListener("touchmove", (e) => { if ((e as TouchEvent).touches.length > 1) e.preventDefault(); }, { passive: false });
+
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 root.render(
   <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Inter, system-ui, sans-serif", color: "#66736C" }}>

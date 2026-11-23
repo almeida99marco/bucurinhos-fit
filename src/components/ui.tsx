@@ -38,7 +38,7 @@ export const Button = forwardRef<HTMLButtonElement, BtnProps>(function Button(
 
 export function Card({ className, children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn("rounded-2xl border border-line bg-surface p-4 shadow-card sm:p-5", className)} {...rest}>
+    <div className={cn("min-w-0 rounded-2xl border border-line bg-surface p-4 shadow-card sm:p-5", className)} {...rest}>
       {children}
     </div>
   );
@@ -57,7 +57,7 @@ export function CardTitle({ children, action, icon }: { children: ReactNode; act
 }
 
 const inputCls =
-  "w-full rounded-xl border border-line bg-surface2 px-3 py-2.5 text-sm text-ink placeholder:text-muted/70 outline-none transition focus:border-brand/60 focus:ring-2 focus:ring-brand/20 disabled:opacity-60";
+  "w-full rounded-xl border border-line bg-surface2 px-3 py-2.5 text-base text-ink sm:text-sm placeholder:text-muted/70 outline-none transition focus:border-brand/60 focus:ring-2 focus:ring-brand/20 disabled:opacity-60";
 
 export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(function Input({ className, ...p }, ref) {
   return <input ref={ref} className={cn(inputCls, className)} {...p} />;
