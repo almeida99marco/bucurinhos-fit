@@ -72,11 +72,13 @@ async function openAICompat(url: string, key: string, models: string[], system: 
       const data = await res.json();
       return data?.choices?.[0]?.message?.content ?? "";
     }
-    last = res;
+    const text = await res.text().catch(() => "");
+    console.error("AI model failed", model, res.status, text.slice(0, 200));
+    // Guarda o erro mais útil: um 404 (modelo inexistente) não substitui um erro real anterior
+    if (!last || res.status !== 404) last = new Response(text, { status: res.status });
     // Modelo inexistente, sobrecarregado ou com limite esgotado: tenta o próximo da lista
     if (![404, 429, 500, 503].includes(res.status)) break;
-    await res.body?.cancel().catch(() => undefined);
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 300));
   }
   await assertOk(last!);
   return "";
@@ -87,7 +89,7 @@ export async function callAI(system: string, user: string): Promise<any> {
   const anthropicKey = clean(Deno.env.get("ANTHROPIC_API_KEY"));
   let content = "";
   if (geminiKey) {
-    const models = [Deno.env.get("AI_MODEL"), "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"].filter(Boolean) as string[];
+    const models = [Deno.env.get("AI_MODEL"), "gemini-3.5-flash", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-2.5-flash"].filter(Boolean) as string[];
     content = await openAICompat("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiKey, models, system, user);
   } else if (anthropicKey) {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
