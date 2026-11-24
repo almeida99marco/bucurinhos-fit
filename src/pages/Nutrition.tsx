@@ -11,9 +11,10 @@ import { GROUP_LABEL, guessGroup, householdFor, matchFood, scaleFood, swapsFor, 
 import { Badge, Button, Card, CardTitle, Disclaimer, Empty, Field, Input, Modal, PageHeader, PageLoader, Progress, Select, Tabs, Textarea } from "@/components/ui";
 import { useAction, useFeedback } from "@/components/feedback";
 import { WaterCard } from "@/components/WaterCard";
+import { WeekTab } from "@/components/WeekPlan";
 import { BarTrend } from "@/components/charts";
 
-type Tab = "plano" | "hoje" | "perfil" | "historico";
+type Tab = "plano" | "semana" | "hoje" | "perfil" | "historico";
 
 const DISCLAIMER =
   "As sugestões nutricionais do Bucurinho's Fit são educativas e não substituem a avaliação de um nutricionista. Em caso de condições de saúde, gestação, uso de medicamentos ou dúvidas, procure um profissional.";
@@ -33,12 +34,14 @@ export default function Nutrition() {
         onChange={setTab}
         items={[
           { value: "plano", label: "Plano atual" },
+          { value: "semana", label: "Semana e compras" },
           { value: "hoje", label: "Hoje" },
           { value: "perfil", label: "Perfil nutricional" },
           { value: "historico", label: "Histórico" },
         ]}
       />
       {tab === "plano" && <PlanTab np={np} goProfile={() => setTab("perfil")} />}
+      {tab === "semana" && <WeekTab goPlan={() => setTab("plano")} />}
       {tab === "hoje" && <TodayTab />}
       {tab === "perfil" && <ProfileTab np={np} onSaved={reloadNp} goPlan={() => setTab("plano")} />}
       {tab === "historico" && <HistoryTab onActivated={() => setTab("plano")} />}

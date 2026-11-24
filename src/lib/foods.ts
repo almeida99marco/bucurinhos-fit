@@ -14,6 +14,53 @@ export type FoodRef = {
   alias?: string;
 };
 
+/** Como comprar: nome do item cru e fator (peso cru = peso preparado × fator). */
+export const RAW: Record<string, [string, number]> = {
+  "Arroz branco cozido": ["Arroz branco (cru)", 0.4],
+  "Arroz integral cozido": ["Arroz integral (cru)", 0.4],
+  "Macarrão cozido": ["Macarrão (cru)", 0.43],
+  "Macarrão integral cozido": ["Macarrão integral (cru)", 0.43],
+  "Feijão carioca cozido": ["Feijão carioca (cru)", 0.45],
+  "Feijão preto cozido": ["Feijão preto (cru)", 0.45],
+  "Lentilha cozida": ["Lentilha (crua)", 0.45],
+  "Grão-de-bico cozido": ["Grão-de-bico (cru)", 0.45],
+  "Quinoa cozida": ["Quinoa (crua)", 0.38],
+  "Cuscuz de milho": ["Flocão de milho", 0.45],
+  "Peito de frango grelhado": ["Peito de frango (cru)", 1.35],
+  "Coxa de frango assada sem pele": ["Coxa/sobrecoxa de frango (crua)", 1.35],
+  "Patinho bovino grelhado": ["Patinho bovino (cru)", 1.4],
+  "Carne moída refogada": ["Carne moída (crua)", 1.35],
+  "Alcatra grelhada": ["Alcatra (crua)", 1.4],
+  "Lombo suíno assado": ["Lombo suíno (cru)", 1.4],
+  "Filé de tilápia grelhado": ["Filé de tilápia (cru)", 1.3],
+  "Salmão grelhado": ["Salmão (cru)", 1.25],
+  "Camarão cozido": ["Camarão (cru, limpo)", 1.3],
+  "Clara de ovo cozida": ["Ovos (para as claras)", 1],
+  "Ovo cozido": ["Ovos", 1],
+};
+
+/** Em que tipo de refeição o alimento costuma aparecer (para variações que façam sentido). */
+const CAFE = /^(P[aã]o|Tapioca|Aveia|Granola|Cuscuz|Ovo|Clara|Peito de peru|Whey|Mel|Queijo|Ricota|Iogurte|Leite)/;
+const PRATO = /^(Arroz|Macarr|Batata|Mandioca|Cuscuz|Milho|Quinoa|Feij|Lentilha|Gr[aã]o|Peito de frango|Coxa|Patinho|Carne|Alcatra|Lombo|Fil[eé]|Salm|Atum|Sardinha|Camar|Ovo|Tofu)/;
+export function contextOf(name: string, mealType?: string): ("cafe" | "prato")[] {
+  const ref = matchFood(name);
+  const n = ref?.name ?? name;
+  const out: ("cafe" | "prato")[] = [];
+  if (CAFE.test(n) || ref?.group === "fruta") out.push("cafe");
+  if (PRATO.test(n) || ref?.group === "vegetal" || ref?.group === "leguminosa") out.push("prato");
+  if (out.length) return out;
+  return mealType === "almoco" || mealType === "jantar" ? ["prato"] : ["cafe"];
+}
+
+export type Section = "Hortifrúti" | "Carnes, peixes e ovos" | "Laticínios" | "Padaria" | "Mercearia";
+export const SECTION_ORDER: Section[] = ["Hortifrúti", "Carnes, peixes e ovos", "Laticínios", "Padaria", "Mercearia"];
+export function sectionOf(f: FoodRef | null, group: FoodGroup): Section {
+  if (f && /^P[aã]o/.test(f.name)) return "Padaria";
+  if (f && /^(Batata|Mandioca|Milho verde)/.test(f.name)) return "Hortifrúti";
+  if (f?.name === "Whey protein") return "Mercearia";
+  return group === "fruta" || group === "vegetal" ? "Hortifrúti" : group === "proteina" ? "Carnes, peixes e ovos" : group === "laticinio" ? "Laticínios" : "Mercearia";
+}
+
 export const GROUP_LABEL: Record<FoodGroup, string> = {
   proteina: "Proteínas",
   carboidrato: "Carboidratos",
